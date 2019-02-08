@@ -432,7 +432,7 @@ gradients_from_eddy
     .mix(gradients_from_eddy_topup)
     .into{gradients_for_resample_b0;
           gradients_for_dti_shell;
-          gradients_for_fodf_shell;
+          gradients_for_b2000_shell;
           gradients_for_normalize}
 
 process Extract_B0 {
@@ -649,7 +649,7 @@ process Resample_DWI {
     set sid, "${sid}__dwi_resampled.nii.gz" into\
         dwi_for_resample_b0,
         dwi_for_extract_dti_shell,
-        dwi_for_extract_fodf_shell
+        dwi_for_extract_b2000_shell
 
     script:
     if (params.run_resample_dwi)
@@ -687,7 +687,8 @@ process Resample_B0 {
     set sid, "${sid}__b0_resampled.nii.gz" into b0_for_reg
     set sid, "${sid}__b0_mask_resampled.nii.gz" into\
         b0_mask_for_dti_metrics,
-        b0_mask_for_fodf,
+        b0_mask_for_b2000_fodf,
+        b0_mask_for_b1000_fodf,
         b0_mask_for_rf
 
     script:
@@ -714,7 +715,8 @@ process Extract_DTI_Shell {
     set sid, "${sid}__dwi_dti.nii.gz", "${sid}__bval_dti",
         "${sid}__bvec_dti" into \
         dwi_and_grad_for_dti_metrics, \
-        dwi_and_grad_for_rf
+        dwi_and_grad_for_rf, \
+        dwi_and_grad_for_b1000_fodf
 
     script:
     """
@@ -762,7 +764,8 @@ process DTI_Metrics {
     file "${sid}__residual_q3_residuals.npy"
     file "${sid}__residual_residuals_stats.png"
     file "${sid}__residual_std_residuals.npy"
-    set sid, "${sid}__fa.nii.gz", "${sid}__md.nii.gz" into fa_md_for_fodf
+    set sid, "${sid}__fa.nii.gz", "${sid}__md.nii.gz" into fa_md_for_b1000_fodf, \
+        fa_md_for_b2000_fodf
     set sid, "${sid}__fa.nii.gz" into\
         fa_for_reg
 
@@ -782,27 +785,27 @@ process DTI_Metrics {
     """
 }
 
-dwi_for_extract_fodf_shell
-    .join(gradients_for_fodf_shell)
-    .set{dwi_and_grad_for_extract_fodf_shell}
+dwi_for_extract_b2000_shell
+    .join(gradients_for_b2000_shell)
+    .set{dwi_and_grad_for_extract_b2000_shell}
 
-process Extract_FODF_Shell {
+process Extract_B2000_Shell {
     cpus 3
 
     input:
     set sid, file(dwi), file(bval), file(bvec)\
-        from dwi_and_grad_for_extract_fodf_shell
+        from dwi_and_grad_for_extract_b2000_shell
 
     output:
-    set sid, "${sid}__dwi_fodf.nii.gz", "${sid}__bval_fodf",
-        "${sid}__bvec_fodf" into\
-        dwi_and_grad_for_fodf
+    set sid, "${sid}__dwi_b2000.nii.gz", "${sid}__bval_b2000",
+        "${sid}__bvec_b2000" into\
+        dwi_and_grad_for_b2000_fodf
 
     script:
     """
     scil_extract_dwi_shell.py $dwi \
-        $bval $bvec $params.fodf_shells ${sid}__dwi_fodf.nii.gz \
-        ${sid}__bval_fodf ${sid}__bvec_fodf -t $params.dwi_shell_tolerance -f
+        $bval $bvec $params.b2000_shells ${sid}__dwi_b2000.nii.gz \
+        ${sid}__bval_b2000 ${sid}__bvec_b2000 -t $params.dwi_shell_tolerance -f
     """
 }
 
@@ -944,48 +947,112 @@ if (params.mean_frf) {
                    .map{it -> [it[0], it[2]]}
 }
 
-dwi_and_grad_for_fodf
-    .join(b0_mask_for_fodf)
-    .join(fa_md_for_fodf)
-    .join(frf_for_fodf)
-    .set{dwi_b0_metrics_frf_for_fodf}
+frf_for_fodf.into { frf_for_b1000_fodf; frf_for_b2000_fodf }
 
-process FODF_Metrics {
+dwi_and_grad_for_b2000_fodf
+    .join(b0_mask_for_b2000_fodf)
+    .join(fa_md_for_b2000_fodf)
+    .join(frf_for_b2000_fodf)
+    .set{dwi_b0_metrics_frf_for_b2000_fodf}
+
+process FODF_Metrics_b2000 {
     cpus params.processes_fodf
 
     input:
     set sid, file(dwi), file(bval), file(bvec), file(b0_mask), file(fa),
-        file(md), file(frf) from dwi_b0_metrics_frf_for_fodf
+        file(md), file(frf) from dwi_b0_metrics_frf_for_b2000_fodf
 
     output:
-    set sid, "${sid}__fodf.nii.gz" into fodf_for_tracking
-    file "${sid}__peaks.nii.gz"
-    file "${sid}__peak_indices.nii.gz"
-    file "${sid}__afd_max.nii.gz"
-    file "${sid}__afd_total.nii.gz"
-    file "${sid}__afd_sum.nii.gz"
-    file "${sid}__nufo.nii.gz"
+    set sid, "${sid}__fodf_b2000.nii.gz" into fodf_b2000_for_merging
+    file "${sid}__peaks_b2000.nii.gz"
+    file "${sid}__peak_indices_b2000.nii.gz"
+    file "${sid}__afd_max_b2000.nii.gz"
+    file "${sid}__afd_total_b2000.nii.gz"
+    file "${sid}__afd_sum_b2000.nii.gz"
+    file "${sid}__nufo_b2000.nii.gz"
 
     script:
     """ 
     scil_compute_fodf.py $dwi $bval $bvec $frf --sh_order $params.sh_order\
         --sh_basis $params.basis --force_b0_threshold --mask $b0_mask\
-        --fodf ${sid}__fodf.nii.gz --peaks ${sid}__peaks.nii.gz\
-        --peak_indices ${sid}__peak_indices.nii.gz --processes $task.cpus
+        --fodf ${sid}__fodf_b2000.nii.gz --peaks ${sid}__peaks_b2000.nii.gz\
+        --peak_indices ${sid}__peak_indices_b2000.nii.gz --processes $task.cpus
 
-    scil_compute_fodf_max_in_ventricles.py ${sid}__fodf.nii.gz $fa $md\
+    scil_compute_fodf_max_in_ventricles.py ${sid}__fodf_b2000.nii.gz $fa $md\
         --max_value_output ventricles_fodf_max_value.txt --sh_basis $params.basis\
         --fa_t $params.max_fa_in_ventricle --md_t $params.min_md_in_ventricle\
         -f
 
     a_threshold=\$(echo $params.fodf_metrics_a_factor*\$(cat ventricles_fodf_max_value.txt)|bc)
 
-    scil_compute_fodf_metrics.py ${sid}__fodf.nii.gz \${a_threshold}\
-        --mask $b0_mask --sh_basis $params.basis --afd ${sid}__afd_max.nii.gz\
-        --afd_total ${sid}__afd_total.nii.gz --afd_sum ${sid}__afd_sum.nii.gz\
-        --nufo ${sid}__nufo.nii.gz --rt $params.relative_threshold -f
+    scil_compute_fodf_metrics.py ${sid}__fodf_b2000.nii.gz \${a_threshold}\
+        --mask $b0_mask --sh_basis $params.basis --afd ${sid}__afd_max_b2000.nii.gz\
+        --afd_total ${sid}__afd_total_b2000.nii.gz --afd_sum ${sid}__afd_sum_b2000.nii.gz\
+        --nufo ${sid}__nufo_b2000.nii.gz --rt $params.relative_threshold -f
     """
 }
+
+
+dwi_and_grad_for_b1000_fodf
+    .join(b0_mask_for_b1000_fodf)
+    .join(fa_md_for_b1000_fodf)
+    .join(frf_for_b1000_fodf)
+    .set{dwi_b0_metrics_frf_for_b1000_fodf}
+
+process FODF_Metrics_b1000 {
+    cpus params.processes_fodf
+
+    input:
+    set sid, file(dwi), file(bval), file(bvec), file(b0_mask), file(fa),
+        file(md), file(frf) from dwi_b0_metrics_frf_for_b1000_fodf
+
+    output:
+    set sid, "${sid}__fodf_b1000.nii.gz" into fodf_b1000_for_merging
+    file "${sid}__peaks_b1000.nii.gz"
+    file "${sid}__peak_indices_b1000.nii.gz"
+    file "${sid}__afd_max_b1000.nii.gz"
+    file "${sid}__afd_total_b1000.nii.gz"
+    file "${sid}__afd_sum_b1000.nii.gz"
+    file "${sid}__nufo_b1000.nii.gz"
+
+    script:
+    """ 
+    scil_compute_fodf.py $dwi $bval $bvec $frf --sh_order $params.sh_order\
+        --sh_basis $params.basis --force_b0_threshold --mask $b0_mask\
+        --fodf ${sid}__fodf_b1000.nii.gz --peaks ${sid}__peaks_b1000.nii.gz\
+        --peak_indices ${sid}__peak_indices_b1000.nii.gz --processes $task.cpus
+
+    scil_compute_fodf_max_in_ventricles.py ${sid}__fodf_b1000.nii.gz $fa $md\
+        --max_value_output ventricles_fodf_max_value.txt --sh_basis $params.basis\
+        --fa_t $params.max_fa_in_ventricle --md_t $params.min_md_in_ventricle\
+        -f
+
+    a_threshold=\$(echo $params.fodf_metrics_a_factor*\$(cat ventricles_fodf_max_value.txt)|bc)
+
+    scil_compute_fodf_metrics.py ${sid}__fodf_b1000.nii.gz \${a_threshold}\
+        --mask $b0_mask --sh_basis $params.basis --afd ${sid}__afd_max_b1000.nii.gz\
+        --afd_total ${sid}__afd_total_b1000.nii.gz --afd_sum ${sid}__afd_sum_b1000.nii.gz\
+        --nufo ${sid}__nufo_b1000.nii.gz --rt $params.relative_threshold -f
+    """
+}
+
+fodf_b1000_for_merging
+    .join(fodf_b2000_for_merging)
+    .set{fodfs_for_merging}
+
+process Merge_FODFs {
+    input:
+    set sid, file(fodf_b1000), file(fodf_b2000) from fodfs_for_merging
+
+    output:
+    set sid, "${sid}__final_fodf.nii.gz" into fodf_for_tracking
+
+    script:
+    """
+    scil_merge_sh.py $fodf_b1000 $fodf_b2000 ${sid}__final_fodf.nii.gz
+    """
+}
+
 
 process PFT_Maps {
     cpus 1
